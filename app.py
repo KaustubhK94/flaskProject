@@ -9,6 +9,10 @@ from llama_index.llms.gradient import GradientBaseModelLLM
 import os
 import json
 
+from werkzeug.utils import secure_filename
+from werkzeug.datastructures import FileStorage
+import mimetypes
+
 app = Flask(__name__)
 
 # Configuration for file uploads
@@ -54,12 +58,7 @@ service_context = ServiceContext.from_defaults(
 )
 set_global_service_context(service_context)
 
-# Vector Store Index setup
-documents_directory = r'C:\Users\Kaustubh_k\PycharmProjects\flaskProject\Document'
-documents = SimpleDirectoryReader(documents_directory).load_data()
-index = VectorStoreIndex.from_documents(documents, service_context=service_context)
-query_engine = index.as_query_engine()
-
+# Function to check if the file has an allowed extension
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -72,19 +71,34 @@ def upload_file():
     if 'file' not in request.files:
         return redirect(request.url)
 
-    file = request.files['file']
+    file: FileStorage = request.files['file']
     user_query = request.form['user_query']
 
-    if file and user_query:
+    if file and allowed_file(file.filename) and user_query:
         filename = secure_filename(file.filename)
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
+
+        # Check if the uploaded file is a PDF
+        mime_type, encoding = mimetypes.guess_type(file_path)
+        if mime_type != 'application/pdf':
+            os.remove(file_path)
+            return render_template('index.html', error="Please upload a valid PDF file.")
+
+        # Reload documents from the updated directory
+        updated_documents = SimpleDirectoryReader(app.config['UPLOAD_FOLDER']).load_data()
+
+        # Initialize the index with the updated documents
+        index = VectorStoreIndex.from_documents(updated_documents, service_context=service_context)
+        query_engine = index.as_query_engine()
 
         # Generate response using LLM and user query
         response = query_engine.query(user_query)
 
         # Render the result template with the response
         return render_template('result.html', result=response)
+
+    return render_template('index.html', error="Please upload a PDF file and enter a query.")
 
 if __name__ == '__main__':
     app.run(debug=True)
